@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -58,7 +59,32 @@ namespace BetterSongList.SortModels {
 						 * There isnt really any "good" setup - LastWriteTime is cloned when copying a file and retained when manually
 						 * extracing from a zip, but the createtime is obviously "reset" when you copy files
 						 */
-						songTimes[song.levelID] = (int)File.GetCreationTimeUtc(levelFolderPath + fpath).ToUnixTime();
+						 //casting to int will fail after year 2038!
+						var songModificationDate = (int)File.GetLastWriteTimeUtc(levelFolderPath + fpath).ToUnixTime();
+						var songCreationDate = (int)File.GetCreationTimeUtc(levelFolderPath + fpath).ToUnixTime();
+						songTimes[song.levelID] = songCreationDate;
+
+						// Wine doesn't correctly report the filecreation date on linux based systems, but instead falls back to the last modified date, which defeats the purpose of this sorter
+						// On linux manually check the creation date with the command stat and use that instead.
+						if(songModificationDate == songCreationDate && Environment.OSVersion.Platform == PlatformID.Unix) {
+							//if something fails, just fallback to basic implementation (modification date)
+							try {
+								var psi = new ProcessStartInfo {
+									FileName = "stat",
+									Arguments = $"--format=%w \"{levelFolderPath + fpath}\"", // %w = birth time
+									RedirectStandardOutput = true,
+									UseShellExecute = false
+								};
+
+								using var proc = Process.Start(psi);
+								string output = proc!.StandardOutput.ReadToEnd().Trim();
+								proc.WaitForExit();
+
+								if(DateTimeOffset.TryParse(output, out var dt))
+									songTimes[song.levelID] = (int)dt.ToUniversalTime().ToUnixTimeSeconds();
+							} catch { }
+						}
+
 					}
 
 					Plugin.Log.Debug(string.Format("Getting SongFolder dates took {0}ms", xy.ElapsedMilliseconds));
